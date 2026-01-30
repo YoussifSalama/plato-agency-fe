@@ -1,0 +1,491 @@
+import Cookies from "js-cookie";
+import { create } from "zustand";
+import { apiClient } from "@/lib/apiClient";
+import { ACCESS_TOKEN_KEY } from "@/lib/authTokens";
+import { errorToast, successToast } from "@/shared/helper/toast";
+import { resolveErrorMessage, resolveResponseMessage } from "@/shared/helper/apiMessages";
+import type { IResume, IPaginationMeta } from "@/shared/store/pages/resume/useResumeStore";
+
+export type JobListItem = {
+    id: number;
+    title: string;
+    workplace_type: string;
+    employment_type: string;
+    seniority_level: string;
+    industry: string;
+    location: string;
+    is_active: boolean;
+    created_at?: string;
+};
+
+export type JobPaginationMeta = {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+    current_page: number;
+    next_page: number | null;
+    previous_page: number | null;
+    has_next_page: boolean;
+    has_previous_page: boolean;
+    is_first_page: boolean;
+    is_last_page: boolean;
+};
+
+export type CreateJobPayload = {
+    title: string;
+    workplace_type: string;
+    employment_type: string;
+    seniority_level: string;
+    industry: string;
+    location: string;
+    salary_currency: string;
+    salary_from: number;
+    salary_to: number;
+    is_salary_negotiable?: boolean;
+    description: string;
+    requirements: string;
+    certifications?: string;
+    auto_score_matching_threshold?: number;
+    auto_email_invite_threshold?: number;
+    auto_shortlisted_threshold?: number;
+    auto_denied_threshold?: number;
+    soft_skills?: string[];
+    technical_skills?: string[];
+    languages?: unknown[];
+};
+
+export type CreateJobAiPromptPayload = {
+    target: string;
+    prompt: string;
+    evaluation: { key: string; value: string }[];
+};
+
+export type JobAiPrompt = {
+    id: number;
+    target: string;
+    prompt: string;
+    evaluation?: unknown;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+};
+
+export type JobDetail = JobListItem & {
+    auto_score_matching_threshold?: number | null;
+    auto_email_invite_threshold?: number | null;
+    auto_shortlisted_threshold?: number | null;
+    auto_denied_threshold?: number | null;
+    salary_currency: string;
+    salary_from: number;
+    salary_to: number;
+    is_salary_negotiable: boolean;
+    description: string;
+    requirements: string;
+    certifications: string;
+    soft_skills: string[];
+    technical_skills: string[];
+    languages: unknown[];
+    jobAiPrompt?: JobAiPrompt | null;
+};
+
+export type JobSearchOption = {
+    id: number;
+    title: string;
+    created_at?: string;
+};
+
+interface IJobStore {
+    jobs: JobListItem[];
+    job: JobDetail | null;
+    jobSearchResults: JobSearchOption[];
+    jobResumes: IResume[];
+    jobResumesMeta: IPaginationMeta | null;
+    meta: JobPaginationMeta | null;
+    loadingJobs: boolean;
+    hasLoadedJobs: boolean;
+    loadingJob: boolean;
+    loadingJobResumes: boolean;
+    loadingCreateJob: boolean;
+    loadingUpdateJob: boolean;
+    loadingCreatePrompt: boolean;
+    loadingUpsertPrompt: boolean;
+    loadingToggleActive: boolean;
+    loadingJobSearch: boolean;
+    resumeActionLoading: { id: number | string; type: "deny" | "shortlist" | "invite" } | null;
+    getJobs: (
+        partial_matching: string,
+        sort_by: string,
+        sort_order: string,
+        page: number,
+        is_active?: boolean | null,
+        accessToken?: string | null
+    ) => Promise<void>;
+    searchJobs: (partial_matching: string, accessToken?: string | null) => Promise<void>;
+    getJobById: (id: number, accessToken?: string | null) => Promise<JobDetail | null>;
+    getJobResumes: (
+        id: number,
+        partial_matching: string,
+        sort_by: string,
+        sort_order: string,
+        page: number,
+        recommendation?: string | null,
+        score?: string | number | null,
+        autoInvited?: boolean | null,
+        autoShortlisted?: boolean | null,
+        autoDenied?: boolean | null,
+        accessToken?: string | null
+    ) => Promise<void>;
+    denyJobResume: (id: number | string, value: boolean, accessToken?: string | null) => Promise<void>;
+    shortlistJobResume: (id: number | string, value: boolean, accessToken?: string | null) => Promise<void>;
+    inviteJobResume: (id: number | string, accessToken?: string | null) => Promise<void>;
+    createJob: (payload: CreateJobPayload, accessToken?: string | null) => Promise<JobListItem | null>;
+    updateJob: (id: number, payload: CreateJobPayload, accessToken?: string | null) => Promise<JobDetail | null>;
+    setJobActiveStatus: (id: number, isActive: boolean, accessToken?: string | null) => Promise<boolean>;
+    createJobAiPrompt: (payload: CreateJobAiPromptPayload, accessToken?: string | null) => Promise<boolean>;
+    upsertJobAiPrompt: (id: number, payload: CreateJobAiPromptPayload, accessToken?: string | null) => Promise<boolean>;
+}
+
+const getToken = (accessToken?: string | null) => {
+    if (accessToken) return accessToken;
+    if (typeof window === "undefined") return null;
+    return Cookies.get(ACCESS_TOKEN_KEY) ?? null;
+};
+
+export const useJobStore = create<IJobStore>((set, get) => ({
+    jobs: [],
+    job: null,
+    jobSearchResults: [],
+    jobResumes: [],
+    jobResumesMeta: null,
+    meta: null,
+    loadingJobs: false,
+    hasLoadedJobs: false,
+    loadingJob: false,
+    loadingJobResumes: false,
+    loadingCreateJob: false,
+    loadingUpdateJob: false,
+    loadingCreatePrompt: false,
+    loadingUpsertPrompt: false,
+    loadingToggleActive: false,
+    loadingJobSearch: false,
+    resumeActionLoading: null,
+    getJobs: async (partial_matching, sort_by, sort_order, page, is_active, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return;
+        set({ loadingJobs: true });
+        try {
+            const params: Record<string, unknown> = {
+                partial_matching,
+                sort_by,
+                sort_order,
+                page,
+                limit: 10,
+            };
+            if (typeof is_active === "boolean") {
+                params.is_active = is_active;
+            }
+            const response = await apiClient.get("/agency/jobs", {
+                headers: { Authorization: `Bearer ${token}` },
+                params,
+            });
+            const jobs = (response.data?.data ?? response.data ?? []) as JobListItem[];
+            const meta = (response.data?.meta ?? null) as JobPaginationMeta | null;
+            set({ jobs, meta, hasLoadedJobs: true });
+        } catch {
+            set({ hasLoadedJobs: true });
+        } finally {
+            set({ loadingJobs: false });
+        }
+    },
+    searchJobs: async (partial_matching, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return;
+        set({ loadingJobSearch: true });
+        try {
+            const response = await apiClient.get("/agency/jobs/search", {
+                headers: { Authorization: `Bearer ${token}` },
+                params: {
+                    partial_matching,
+                    limit: 10,
+                },
+            });
+            const results = (response.data?.data ?? response.data ?? []) as JobSearchOption[];
+            set({ jobSearchResults: results });
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't load jobs."));
+        } finally {
+            set({ loadingJobSearch: false });
+        }
+    },
+    getJobById: async (id, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return null;
+        set({ loadingJob: true });
+        try {
+            const response = await apiClient.get(`/agency/jobs/${id}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const job = (response.data?.data ?? response.data) as JobDetail;
+            set({ job });
+            return job;
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't load job."));
+            return null;
+        } finally {
+            set({ loadingJob: false });
+        }
+    },
+    getJobResumes: async (
+        id,
+        partial_matching,
+        sort_by,
+        sort_order,
+        page,
+        recommendation,
+        score,
+        autoInvited,
+        autoShortlisted,
+        autoDenied,
+        accessToken
+    ) => {
+        const token = getToken(accessToken);
+        if (!token) return;
+        set({ loadingJobResumes: true });
+        try {
+            const params: Record<string, unknown> = {
+                partial_matching,
+                sort_by,
+                sort_order,
+                page,
+                limit: 15,
+            };
+            if (recommendation) {
+                params.recommendation = recommendation;
+            }
+            const scoreValue =
+                typeof score === "string"
+                    ? score.trim() === ""
+                        ? null
+                        : Number(score)
+                    : score;
+            if (typeof scoreValue === "number" && !Number.isNaN(scoreValue)) {
+                params.score = scoreValue;
+            }
+            if (typeof autoInvited === "boolean") {
+                params.auto_invited = autoInvited;
+            }
+            if (typeof autoShortlisted === "boolean") {
+                params.auto_shortlisted = autoShortlisted;
+            }
+            if (typeof autoDenied === "boolean") {
+                params.auto_denied = autoDenied;
+            }
+            const response = await apiClient.get(`/agency/jobs/${id}/resumes`, {
+                headers: { Authorization: `Bearer ${token}` },
+                params,
+            });
+            const jobResumes = (response.data?.data ?? response.data ?? []) as IResume[];
+            const jobResumesMeta = (response.data?.meta ?? null) as IPaginationMeta | null;
+            set({ jobResumes, jobResumesMeta });
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't load job resumes."));
+        } finally {
+            set({ loadingJobResumes: false });
+        }
+    },
+    denyJobResume: async (id, value, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return;
+        set({ resumeActionLoading: { id, type: "deny" } });
+        try {
+            const response = await apiClient.patch(
+                `/resume/${id}/deny`,
+                { auto_denied: value },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            const updated = response.data?.data ?? null;
+            if (updated) {
+                set((state) => ({
+                    jobResumes: state.jobResumes.map((resume) =>
+                        String(resume.id) === String(updated.id)
+                            ? { ...resume, ...updated }
+                            : resume
+                    ),
+                }));
+            }
+            successToast(
+                resolveResponseMessage(
+                    response,
+                    value ? "Resume denied successfully." : "Resume denial removed successfully."
+                )
+            );
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Failed to update resume."));
+        } finally {
+            set({ resumeActionLoading: null });
+        }
+    },
+    shortlistJobResume: async (id, value, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return;
+        set({ resumeActionLoading: { id, type: "shortlist" } });
+        try {
+            const response = await apiClient.patch(
+                `/resume/${id}/shortlist`,
+                { auto_shortlisted: value },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            const updated = response.data?.data ?? null;
+            if (updated) {
+                set((state) => ({
+                    jobResumes: state.jobResumes.map((resume) =>
+                        String(resume.id) === String(updated.id)
+                            ? { ...resume, ...updated }
+                            : resume
+                    ),
+                }));
+            }
+            successToast(
+                resolveResponseMessage(
+                    response,
+                    value ? "Resume shortlisted successfully." : "Resume removed from shortlist successfully."
+                )
+            );
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Failed to update resume."));
+        } finally {
+            set({ resumeActionLoading: null });
+        }
+    },
+    inviteJobResume: async (id, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return;
+        set({ resumeActionLoading: { id, type: "invite" } });
+        try {
+            const response = await apiClient.post(
+                `/resume/${id}/invite`,
+                {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            const updated = response.data?.data ?? null;
+            if (updated) {
+                set((state) => ({
+                    jobResumes: state.jobResumes.map((resume) =>
+                        String(resume.id) === String(updated.id)
+                            ? { ...resume, ...updated }
+                            : resume
+                    ),
+                }));
+            }
+            successToast(resolveResponseMessage(response, "Invitation sent successfully."));
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Failed to send invitation."));
+        } finally {
+            set({ resumeActionLoading: null });
+        }
+    },
+    createJob: async (payload, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return null;
+        set({ loadingCreateJob: true });
+        try {
+            const response = await apiClient.post("/agency/jobs", payload, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const job = (response.data?.data ?? response.data) as JobListItem;
+            const nextJobs = [job, ...get().jobs];
+            set({ jobs: nextJobs });
+            successToast(resolveResponseMessage(response, "Job created successfully."));
+            return job;
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't create the job."));
+            return null;
+        } finally {
+            set({ loadingCreateJob: false });
+        }
+    },
+    updateJob: async (id, payload, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return null;
+        set({ loadingUpdateJob: true });
+        try {
+            const response = await apiClient.patch(`/agency/jobs/${id}`, payload, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const job = (response.data?.data ?? response.data) as JobDetail;
+            set({ job });
+            successToast(resolveResponseMessage(response, "Job updated successfully."));
+            return job;
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't update the job."));
+            return null;
+        } finally {
+            set({ loadingUpdateJob: false });
+        }
+    },
+    setJobActiveStatus: async (id, isActive, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return false;
+        set({ loadingToggleActive: true });
+        try {
+            const endpoint = isActive ? "activate" : "inactivate";
+            const response = await apiClient.patch(
+                `/agency/jobs/${id}/${endpoint}`,
+                null,
+                {
+                    headers: { Authorization: `Bearer ${token}` },
+                }
+            );
+            const job = (response.data?.data ?? response.data) as JobDetail;
+            set({ job });
+            successToast(
+                resolveResponseMessage(
+                    response,
+                    isActive ? "Job activated." : "Job inactivated."
+                )
+            );
+            return true;
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't update job status."));
+            return false;
+        } finally {
+            set({ loadingToggleActive: false });
+        }
+    },
+    createJobAiPrompt: async (payload, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return false;
+        set({ loadingCreatePrompt: true });
+        try {
+            const response = await apiClient.post("/agency/job-ai-prompts", payload, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            successToast(resolveResponseMessage(response, "AI prompt saved successfully."));
+            return true;
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't save the AI prompt."));
+            return false;
+        } finally {
+            set({ loadingCreatePrompt: false });
+        }
+    },
+    upsertJobAiPrompt: async (id, payload, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return false;
+        set({ loadingUpsertPrompt: true });
+        try {
+            const response = await apiClient.post(`/agency/jobs/${id}/ai-prompt`, payload, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            successToast(resolveResponseMessage(response, "AI prompt saved successfully."));
+            return true;
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't save the AI prompt."));
+            return false;
+        } finally {
+            set({ loadingUpsertPrompt: false });
+        }
+    },
+}));
+
