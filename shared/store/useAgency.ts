@@ -13,6 +13,7 @@ type AgencyAccountData = {
     l_name: string;
     user_name: string;
     name?: string;
+    agencyId?: number | null;
 };
 
 type UpdateAccountPayload = {
@@ -23,10 +24,15 @@ type UpdateAccountPayload = {
 
 interface IAgencyStore {
     account: AgencyAccountData | null;
+    agencyStatus: { agencyId: number | null; hasAgency: boolean; isComplete: boolean } | null;
     loadingAccount: boolean;
+    loadingAgencyStatus: boolean;
     loadingUpdateBrand: boolean;
     loadingChangePassword: boolean;
     getMyAgencyAccountData: (accessToken?: string | null) => Promise<AgencyAccountData | null>;
+    getAgencyStatus: (
+        accessToken?: string | null
+    ) => Promise<{ agencyId: number | null; hasAgency: boolean; isComplete: boolean } | null>;
     updateBrand: (
         payload: UpdateAccountPayload,
         accessToken?: string | null
@@ -45,7 +51,9 @@ const getToken = (accessToken?: string | null) => {
 
 const useAgency = create<IAgencyStore>((set) => ({
     account: null,
+    agencyStatus: null,
     loadingAccount: false,
+    loadingAgencyStatus: false,
     loadingUpdateBrand: false,
     loadingChangePassword: false,
     setAccount: (account) => set({ account }),
@@ -58,6 +66,10 @@ const useAgency = create<IAgencyStore>((set) => ({
                 headers: { Authorization: `Bearer ${token}` },
             });
             const data = (response.data?.data ?? response.data) as AgencyAccountData;
+            const agencyId =
+                Number.isFinite(Number((data as { agency_id?: number | null }).agency_id))
+                    ? Number((data as { agency_id?: number | null }).agency_id)
+                    : data.agencyId ?? null;
             set({
                 account: {
                     email: data.email ?? "",
@@ -65,14 +77,44 @@ const useAgency = create<IAgencyStore>((set) => ({
                     l_name: data.l_name ?? "",
                     user_name: data.user_name ?? "",
                     name: data.name,
+                    agencyId,
                 },
             });
-            return data;
+            return { ...data, agencyId };
         } catch {
             set({ account: null });
             return null;
         } finally {
             set({ loadingAccount: false });
+        }
+    },
+    getAgencyStatus: async (accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return null;
+        set({ loadingAgencyStatus: true });
+        try {
+            const response = await apiClient.get("/agency/status", {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = (response.data?.data ?? response.data) as {
+                agencyId?: number | null;
+                hasAgency?: boolean;
+                isComplete?: boolean;
+            };
+            const nextStatus = {
+                agencyId: Number.isFinite(Number(data?.agencyId))
+                    ? Number(data?.agencyId)
+                    : null,
+                hasAgency: Boolean(data?.hasAgency) || Boolean(data?.agencyId),
+                isComplete: Boolean(data?.isComplete),
+            };
+            set({ agencyStatus: nextStatus });
+            return nextStatus;
+        } catch {
+            set({ agencyStatus: null });
+            return null;
+        } finally {
+            set({ loadingAgencyStatus: false });
         }
     },
     updateBrand: async (payload, accessToken) => {

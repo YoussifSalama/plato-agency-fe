@@ -118,10 +118,13 @@ const JobAiPromptModal = ({
                             </Button>
                         </div>
                         {fields.map((field, index) => (
-                            <div key={field.id} className="rounded-md border border-blue-100 p-3">
+                            <div
+                                key={field.id}
+                                className="mx-auto w-full max-w-2xl rounded-md border border-blue-100 bg-white p-3 dark:border-slate-700/60 dark:bg-slate-900/60"
+                            >
                                 <div className="grid gap-3 sm:grid-cols-2">
                                     <div className="space-y-2">
-                                        <label className="text-xs font-medium text-slate-600">
+                                        <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
                                             Key
                                         </label>
                                         <Input
@@ -135,7 +138,7 @@ const JobAiPromptModal = ({
                                         )}
                                     </div>
                                     <div className="space-y-2">
-                                        <label className="text-xs font-medium text-slate-600">
+                                        <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
                                             Value
                                         </label>
                                         <Input

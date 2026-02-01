@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Lock, Mail } from "lucide-react";
+import Cookies from "js-cookie";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -18,9 +19,10 @@ import {
     DialogTrigger,
 } from "@/components/ui/dialog";
 import useAuthStore from "@/shared/store/pages/auth/useAuthStore";
-import useAgencyStore from "@/shared/store/pages/agency/useAgencyStore";
+import useAgency from "@/shared/store/useAgency";
 import { errorToast, successToast } from "@/shared/helper/toast";
 import ThemeSwitch from "@/shared/components/layout/theme/ThemeSwitch";
+import { ACCESS_TOKEN_KEY } from "@/lib/authTokens";
 
 type LoginFormValues = {
     email: string;
@@ -41,8 +43,8 @@ const resetSchema = z.object({
 });
 
 const LoginPage = () => {
-    const { login, loadingLogin, requestPasswordReset } = useAuthStore();
-    const { getOverview } = useAgencyStore();
+    const { login, loadingLogin, requestPasswordReset, storeTokens } = useAuthStore();
+    const { getMyAgencyAccountData } = useAgency();
     const router = useRouter();
     const [isResetOpen, setIsResetOpen] = useState(false);
     const {
@@ -70,14 +72,32 @@ const LoginPage = () => {
         resolver: zodResolver(resetSchema),
     });
 
+    useEffect(() => {
+        const token =
+            typeof window !== "undefined"
+                ? Cookies.get(ACCESS_TOKEN_KEY) ?? null
+                : null;
+        if (!token) return;
+        const checkStatus = async () => {
+            const account = await getMyAgencyAccountData(token);
+            if (account?.agencyId) {
+                router.push("/");
+            } else {
+                router.push("/auth/overview");
+            }
+        };
+        checkStatus();
+    }, [getMyAgencyAccountData, router]);
+
     const onSubmit = async ({ email, password }: LoginFormValues) => {
-        const result = await login(email, password);
+        const result = await login(email, password, { storeTokens: false });
         if (!result?.access_token) return;
-        const overview = await getOverview(result.access_token);
-        if (overview?.agency && overview.isComplete) {
+        const account = await getMyAgencyAccountData(result.access_token);
+        storeTokens(result.access_token, result.refresh_token);
+        if (account?.agencyId) {
             router.push("/");
         } else {
-            router.push("/overview");
+            router.push("/auth/overview");
         }
     };
 

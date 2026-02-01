@@ -35,7 +35,7 @@ const JobTable = ({
                     <TableHead>Industry</TableHead>
                     <TableHead>Location</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Settings</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
             </TableHeader>
             <TableBody>
@@ -73,7 +73,14 @@ const JobTable = ({
                                 </span>
                             </TableCell>
                             <TableCell className="text-right">
-                                <div className="inline-flex items-center justify-end gap-2">
+                                <div className="inline-flex flex-wrap items-center justify-end gap-2">
+                                    <Link
+                                        href={`/resumes/analyse?jobId=${job.id}`}
+                                        className="inline-flex items-center rounded-full border border-blue-200 px-3 py-1 text-xs font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-700/60 dark:text-slate-200 dark:hover:border-slate-600/60 dark:hover:bg-slate-800/60"
+                                        title="Analyze resumes for this job"
+                                    >
+                                        Analyze resume
+                                    </Link>
                                     <Link
                                         href={`/job/watch?id=${job.id}`}
                                         className="inline-flex rounded-full p-1 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-white"

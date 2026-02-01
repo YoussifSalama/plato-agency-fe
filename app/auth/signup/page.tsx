@@ -68,7 +68,7 @@ const SignupPage = () => {
         if (isCreated) {
             setTimeout(() => {
                 router.push("/auth/login");
-            }, 10000);
+            }, 3000);
         }
     };
 

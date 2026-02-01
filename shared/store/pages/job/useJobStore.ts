@@ -46,6 +46,12 @@ export type CreateJobPayload = {
     description: string;
     requirements: string;
     certifications?: string;
+    company_overview?: string;
+    role_overview?: string;
+    responsibilities?: string;
+    nice_to_have?: string;
+    what_we_offer?: string;
+    job_benefits?: string;
     auto_score_matching_threshold?: number;
     auto_email_invite_threshold?: number;
     auto_shortlisted_threshold?: number;
@@ -53,6 +59,18 @@ export type CreateJobPayload = {
     soft_skills?: string[];
     technical_skills?: string[];
     languages?: unknown[];
+};
+
+export type GenerateJobAiPayload = {
+    title: string;
+    seniority_level: string;
+    industry: string;
+    employment_type: string;
+    workplace_type: string;
+    location: string;
+    technical_skills?: string[];
+    soft_skills?: string[];
+    target?: "description" | "requirements" | "both";
 };
 
 export type CreateJobAiPromptPayload = {
@@ -83,6 +101,12 @@ export type JobDetail = JobListItem & {
     description: string;
     requirements: string;
     certifications: string;
+    company_overview?: string | null;
+    role_overview?: string | null;
+    responsibilities?: string | null;
+    nice_to_have?: string | null;
+    what_we_offer?: string | null;
+    job_benefits?: string | null;
     soft_skills: string[];
     technical_skills: string[];
     languages: unknown[];
@@ -110,6 +134,8 @@ interface IJobStore {
     loadingUpdateJob: boolean;
     loadingCreatePrompt: boolean;
     loadingUpsertPrompt: boolean;
+    loadingGenerateDescription: boolean;
+    loadingGenerateRequirements: boolean;
     loadingToggleActive: boolean;
     loadingJobSearch: boolean;
     resumeActionLoading: { id: number | string; type: "deny" | "shortlist" | "invite" } | null;
@@ -144,6 +170,10 @@ interface IJobStore {
     setJobActiveStatus: (id: number, isActive: boolean, accessToken?: string | null) => Promise<boolean>;
     createJobAiPrompt: (payload: CreateJobAiPromptPayload, accessToken?: string | null) => Promise<boolean>;
     upsertJobAiPrompt: (id: number, payload: CreateJobAiPromptPayload, accessToken?: string | null) => Promise<boolean>;
+    generateJobContent: (
+        payload: GenerateJobAiPayload,
+        accessToken?: string | null
+    ) => Promise<{ description: string; requirements: string } | null>;
 }
 
 const getToken = (accessToken?: string | null) => {
@@ -167,6 +197,8 @@ export const useJobStore = create<IJobStore>((set, get) => ({
     loadingUpdateJob: false,
     loadingCreatePrompt: false,
     loadingUpsertPrompt: false,
+    loadingGenerateDescription: false,
+    loadingGenerateRequirements: false,
     loadingToggleActive: false,
     loadingJobSearch: false,
     resumeActionLoading: null,
@@ -212,8 +244,7 @@ export const useJobStore = create<IJobStore>((set, get) => ({
             });
             const results = (response.data?.data ?? response.data ?? []) as JobSearchOption[];
             set({ jobSearchResults: results });
-        } catch (error) {
-            errorToast(resolveErrorMessage(error, "Couldn't load jobs."));
+        } catch {
         } finally {
             set({ loadingJobSearch: false });
         }
@@ -229,8 +260,7 @@ export const useJobStore = create<IJobStore>((set, get) => ({
             const job = (response.data?.data ?? response.data) as JobDetail;
             set({ job });
             return job;
-        } catch (error) {
-            errorToast(resolveErrorMessage(error, "Couldn't load job."));
+        } catch {
             return null;
         } finally {
             set({ loadingJob: false });
@@ -288,8 +318,7 @@ export const useJobStore = create<IJobStore>((set, get) => ({
             const jobResumes = (response.data?.data ?? response.data ?? []) as IResume[];
             const jobResumesMeta = (response.data?.meta ?? null) as IPaginationMeta | null;
             set({ jobResumes, jobResumesMeta });
-        } catch (error) {
-            errorToast(resolveErrorMessage(error, "Couldn't load job resumes."));
+        } catch {
         } finally {
             set({ loadingJobResumes: false });
         }
@@ -485,6 +514,42 @@ export const useJobStore = create<IJobStore>((set, get) => ({
             return false;
         } finally {
             set({ loadingUpsertPrompt: false });
+        }
+    },
+    generateJobContent: async (payload, accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return null;
+        const target = payload.target ?? "both";
+        if (target === "description") {
+            set({ loadingGenerateDescription: true });
+        } else if (target === "requirements") {
+            set({ loadingGenerateRequirements: true });
+        } else {
+            set({ loadingGenerateDescription: true, loadingGenerateRequirements: true });
+        }
+        try {
+            const response = await apiClient.post("/agency/jobs/ai/generate", payload, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const data = (response.data?.data ?? response.data ?? {}) as {
+                description?: string;
+                requirements?: string;
+            };
+            return {
+                description: data.description ?? "",
+                requirements: data.requirements ?? "",
+            };
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't generate job content."));
+            return null;
+        } finally {
+            if (target === "description") {
+                set({ loadingGenerateDescription: false });
+            } else if (target === "requirements") {
+                set({ loadingGenerateRequirements: false });
+            } else {
+                set({ loadingGenerateDescription: false, loadingGenerateRequirements: false });
+            }
         }
     },
 }));

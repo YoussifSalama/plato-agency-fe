@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     Controller,
-    useFieldArray,
     useForm,
     useWatch,
     type Resolver,
@@ -34,6 +33,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import RetraceTextEditor from "@/shared/components/common/RetraceTextEditor";
 import {
     Select,
     SelectContent,
@@ -80,6 +80,12 @@ const jobSchema = z
         description: z.string().min(1, "Job description is required."),
         requirements: z.string().min(1, "Job requirements are required."),
         certifications: z.union([z.literal(""), z.string()]).optional(),
+        company_overview: z.union([z.literal(""), z.string()]).optional(),
+        role_overview: z.union([z.literal(""), z.string()]).optional(),
+        responsibilities: z.union([z.literal(""), z.string()]).optional(),
+        nice_to_have: z.union([z.literal(""), z.string()]).optional(),
+        what_we_offer: z.union([z.literal(""), z.string()]).optional(),
+        job_benefits: z.union([z.literal(""), z.string()]).optional(),
         auto_score_matching_threshold: z.preprocess(
             numberOrUndefined,
             z.number().min(0).optional()
@@ -107,25 +113,18 @@ const jobSchema = z
 
 type JobFormValues = z.input<typeof jobSchema>;
 
-const aiPromptSchema = z.object({
-    target: z.string().min(1, "Target is required."),
-    prompt: z.string().min(1, "Prompt is required."),
-    evaluation: z
-        .array(
-            z.object({
-                key: z.string().min(1, "Evaluation key is required."),
-                value: z.string().min(1, "Evaluation value is required."),
-            })
-        )
-        .min(1, "Add at least one evaluation item."),
-});
-
 const AddJobForm = () => {
     const DRAFT_KEY = "plato_job_draft_v1";
-    const [activeTab, setActiveTab] = useState<"job" | "ai">("job");
     const [promptOpen, setPromptOpen] = useState(false);
-    const { createJob, createJobAiPrompt, loadingCreateJob, loadingCreatePrompt } =
-        useJobStore();
+    const {
+        createJob,
+        createJobAiPrompt,
+        generateJobContent,
+        loadingCreateJob,
+        loadingCreatePrompt,
+        loadingGenerateDescription,
+        loadingGenerateRequirements,
+    } = useJobStore();
     const {
         register,
         handleSubmit,
@@ -150,6 +149,12 @@ const AddJobForm = () => {
                 description: "",
                 requirements: "",
                 certifications: "",
+                company_overview: "",
+                role_overview: "",
+                responsibilities: "",
+                nice_to_have: "",
+                what_we_offer: "",
+                job_benefits: "",
                 auto_score_matching_threshold: undefined,
                 auto_email_invite_threshold: undefined,
                 auto_shortlisted_threshold: undefined,
@@ -187,26 +192,6 @@ const AddJobForm = () => {
         },
         mode: "onChange",
         resolver: zodResolver(jobSchema) as Resolver<JobFormValues>,
-    });
-
-    const {
-        register: registerPrompt,
-        handleSubmit: handlePromptSubmit,
-        control: promptControl,
-        reset: resetPrompt,
-        formState: { errors: promptErrors, isValid: isPromptValid, isDirty: isPromptDirty },
-    } = useForm<AiPromptFormValues>({
-        defaultValues: {
-            target: "",
-            prompt: "",
-            evaluation: [{ key: "", value: "" }],
-        },
-        mode: "onChange",
-        resolver: zodResolver(aiPromptSchema),
-    });
-    const { fields: promptFields, append: appendPrompt, remove: removePrompt } = useFieldArray({
-        control: promptControl,
-        name: "evaluation",
     });
 
     const watchedSoftSkills = useWatch({ control, name: "soft_skills" });
@@ -257,6 +242,33 @@ const AddJobForm = () => {
         []
     );
 
+    const buildAiPayload = (target: "description" | "requirements") => {
+        const values = getValues();
+        return {
+            title: values.title?.trim() ?? "",
+            seniority_level: values.seniority_level ?? "",
+            industry: values.industry ?? "",
+            employment_type: values.employment_type ?? "",
+            workplace_type: values.workplace_type ?? "",
+            location: values.location ?? "",
+            technical_skills: technicalSkillsList,
+            soft_skills: softSkillsList,
+            target,
+        };
+    };
+
+    const resolveMissingAiFields = () => {
+        const values = getValues();
+        const missing: string[] = [];
+        if (!values.title?.trim()) missing.push("job title");
+        if (!values.employment_type) missing.push("employment type");
+        if (!values.workplace_type) missing.push("workplace type");
+        if (!values.industry) missing.push("industry");
+        if (!values.seniority_level) missing.push("seniority level");
+        if (!values.location) missing.push("location");
+        return missing;
+    };
+
     const onSubmit: SubmitHandler<JobFormValues> = async (values) => {
         const parsed = jobSchema.parse(values);
         const payload = {
@@ -273,6 +285,12 @@ const AddJobForm = () => {
             description: parsed.description,
             requirements: parsed.requirements,
             certifications: parsed.certifications?.trim() || undefined,
+            company_overview: parsed.company_overview?.trim() || undefined,
+            role_overview: parsed.role_overview?.trim() || undefined,
+            responsibilities: parsed.responsibilities?.trim() || undefined,
+            nice_to_have: parsed.nice_to_have?.trim() || undefined,
+            what_we_offer: parsed.what_we_offer?.trim() || undefined,
+            job_benefits: parsed.job_benefits?.trim() || undefined,
             auto_score_matching_threshold: parsed.auto_score_matching_threshold,
             auto_email_invite_threshold: parsed.auto_email_invite_threshold,
             auto_shortlisted_threshold: parsed.auto_shortlisted_threshold,
@@ -290,10 +308,62 @@ const AddJobForm = () => {
             if (typeof window !== "undefined") {
                 window.localStorage.removeItem(DRAFT_KEY);
             }
-            setActiveTab("ai");
             setPromptOpen(true);
         }
     };
+
+    const handleGenerate = async (target: "description" | "requirements") => {
+        const missing = resolveMissingAiFields();
+        if (missing.length > 0) {
+            warningToast(`Fill ${missing.join(", ")} before generating content.`);
+            return;
+        }
+        const payload = buildAiPayload(target);
+        const generated = await generateJobContent(payload);
+        if (!generated) return;
+        if (target === "description") {
+            setValue("description", generated.description, {
+                shouldDirty: true,
+                shouldValidate: true,
+            });
+        } else {
+            setValue("requirements", generated.requirements, {
+                shouldDirty: true,
+                shouldValidate: true,
+            });
+        }
+    };
+
+    const missingAiFields = resolveMissingAiFields();
+
+    const errorSummary = useMemo(() => {
+        const labels: Partial<Record<keyof JobFormValues, string>> = {
+            title: "Job title",
+            employment_type: "Employment type",
+            workplace_type: "Workplace type",
+            seniority_level: "Seniority level",
+            industry: "Industry",
+            location: "Location",
+            salary_currency: "Salary currency",
+            salary_from: "Salary minimum",
+            salary_to: "Salary maximum",
+            description: "Job description",
+            requirements: "Job requirements",
+        };
+        return Object.entries(errors)
+            .map(([key, value]) => {
+                if (key === "root" && typeof value?.message === "string") {
+                    return value.message;
+                }
+                const message =
+                    typeof value?.message === "string"
+                        ? value.message
+                        : "This field needs attention.";
+                const label = labels[key as keyof JobFormValues] ?? key;
+                return `${label}: ${message}`;
+            })
+            .filter(Boolean);
+    }, [errors]);
 
     const handleInvalid: SubmitErrorHandler<JobFormValues> = () => {
         warningToast("Please fix the highlighted errors before submitting.");
@@ -303,17 +373,6 @@ const AddJobForm = () => {
         const ok = await createJobAiPrompt(values);
         if (ok) {
             setPromptOpen(false);
-        }
-    };
-
-    const handleInlinePromptSubmit: SubmitHandler<AiPromptFormValues> = async (values) => {
-        const ok = await createJobAiPrompt(values);
-        if (ok) {
-            resetPrompt({
-                target: "",
-                prompt: "",
-                evaluation: [{ key: "", value: "" }],
-            });
         }
     };
 
@@ -332,538 +391,572 @@ const AddJobForm = () => {
                         Add New Job
                     </h2>
                     <p className="text-sm text-blue-600 dark:text-slate-300">
-                        Publish a new role and optionally attach an AI prompt after creation.
+                        Publish a new role.
                     </p>
-                </div>
-                <div className="mt-4 flex gap-2 rounded-md bg-blue-50 p-1 dark:bg-slate-800/70">
-                    <button
-                        type="button"
-                        onClick={() => setActiveTab("job")}
-                        className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition ${activeTab === "job"
-                            ? "bg-linear-to-r from-[#009ad5] to-[#005ca9] text-white"
-                            : "text-blue-600 hover:bg-blue-100/60 dark:text-slate-300 dark:hover:bg-slate-800"
-                            }`}
-                    >
-                        Job Details
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setActiveTab("ai")}
-                        className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition ${activeTab === "ai"
-                            ? "bg-linear-to-r from-[#009ad5] to-[#005ca9] text-white"
-                            : "text-blue-600 hover:bg-blue-100/60 dark:text-slate-300 dark:hover:bg-slate-800"
-                            }`}
-                    >
-                        AI Prompt (Optional)
-                    </button>
                 </div>
             </div>
 
-            {activeTab === "job" ? (
-                <form
-                    className="space-y-6"
-                    onSubmit={handleSubmit(onSubmit, handleInvalid)}
-                >
-                    <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <div className="space-y-2 md:col-span-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <Briefcase className="h-4 w-4 text-[#005ca9]" />
-                                        Job Title
-                                    </span>
-                                </label>
-                                <Input placeholder="e.g., Senior Frontend Developer" {...register("title")} />
-                                {errors.title && (
-                                    <p className="text-xs text-red-500">{errors.title.message}</p>
-                                )}
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <Users className="h-4 w-4 text-indigo-500" />
-                                        Employment Type
-                                    </span>
-                                </label>
-                                <Controller
-                                    control={control}
-                                    name="employment_type"
-                                    render={({ field }) => (
-                                        <Select
-                                            onValueChange={field.onChange}
-                                            value={field.value}
-                                        >
-                                            <SelectTrigger className="w-full">
-                                                <SelectValue placeholder="Select employment type..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {selectOptions.employment.map((option) => (
-                                                    <SelectItem key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    )}
-                                />
-                                {errors.employment_type && (
-                                    <p className="text-xs text-red-500">
-                                        {errors.employment_type.message}
-                                    </p>
-                                )}
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <Building2 className="h-4 w-4 text-emerald-500" />
-                                        Workplace Type
-                                    </span>
-                                </label>
-                                <Controller
-                                    control={control}
-                                    name="workplace_type"
-                                    render={({ field }) => (
-                                        <Select
-                                            onValueChange={field.onChange}
-                                            value={field.value}
-                                        >
-                                            <SelectTrigger className="w-full">
-                                                <SelectValue placeholder="Select workplace type..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {selectOptions.workplace.map((option) => (
-                                                    <SelectItem key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    )}
-                                />
-                                {errors.workplace_type && (
-                                    <p className="text-xs text-red-500">
-                                        {errors.workplace_type.message}
-                                    </p>
-                                )}
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <BarChart3 className="h-4 w-4 text-amber-500" />
-                                        Seniority Level
-                                    </span>
-                                </label>
-                                <Controller
-                                    control={control}
-                                    name="seniority_level"
-                                    render={({ field }) => (
-                                        <Select
-                                            onValueChange={field.onChange}
-                                            value={field.value}
-                                        >
-                                            <SelectTrigger className="w-full">
-                                                <SelectValue placeholder="Select seniority level..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {selectOptions.seniority.map((option) => (
-                                                    <SelectItem key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    )}
-                                />
-                                {errors.seniority_level && (
-                                    <p className="text-xs text-red-500">
-                                        {errors.seniority_level.message}
-                                    </p>
-                                )}
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <Building2 className="h-4 w-4 text-sky-500" />
-                                        Industry
-                                    </span>
-                                </label>
-                                <Controller
-                                    control={control}
-                                    name="industry"
-                                    render={({ field }) => (
-                                        <Select
-                                            onValueChange={field.onChange}
-                                            value={field.value}
-                                        >
-                                            <SelectTrigger className="w-full">
-                                                <SelectValue placeholder="Select industry..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {selectOptions.industry.map((option) => (
-                                                    <SelectItem key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    )}
-                                />
-                                {errors.industry && (
-                                    <p className="text-xs text-red-500">{errors.industry.message}</p>
-                                )}
-                            </div>
-                            <div className="space-y-2 md:col-span-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <MapPin className="h-4 w-4 text-rose-500" />
-                                        Location
-                                    </span>
-                                </label>
-                                <Input placeholder="e.g., Cairo, Egypt" {...register("location")} />
-                                {errors.location && (
-                                    <p className="text-xs text-red-500">{errors.location.message}</p>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <DollarSign className="h-4 w-4 text-emerald-600" />
-                                        Salary Currency
-                                    </span>
-                                </label>
-                                <Controller
-                                    control={control}
-                                    name="salary_currency"
-                                    render={({ field }) => (
-                                        <Select onValueChange={field.onChange} value={field.value}>
-                                            <SelectTrigger className="w-full">
-                                                <SelectValue placeholder="Select salary currency..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {selectOptions.currency.map((option) => (
-                                                    <SelectItem key={option.value} value={option.value}>
-                                                        {option.label}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    )}
-                                />
-                                {errors.salary_currency && (
-                                    <p className="text-xs text-red-500">
-                                        {errors.salary_currency.message}
-                                    </p>
-                                )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <input
-                                    type="checkbox"
-                                    className="h-4 w-4 accent-[#009ad5]"
-                                    {...register("is_salary_negotiable")}
-                                />
-                                <span className="text-sm text-slate-600 dark:text-slate-300">
-                                    Salary negotiable
-                                </span>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <DollarSign className="h-4 w-4 text-emerald-600" />
-                                        Minimum Salary
-                                    </span>
-                                </label>
-                                <Input type="number" min={0} placeholder="e.g., 1200" {...register("salary_from")} />
-                                {errors.salary_from && (
-                                    <p className="text-xs text-red-500">{errors.salary_from.message}</p>
-                                )}
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <DollarSign className="h-4 w-4 text-emerald-600" />
-                                        Maximum Salary
-                                    </span>
-                                </label>
-                                <Input type="number" min={0} placeholder="e.g., 2000" {...register("salary_to")} />
-                                {errors.salary_to && (
-                                    <p className="text-xs text-red-500">{errors.salary_to.message}</p>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <BarChart3 className="h-4 w-4 text-indigo-500" />
-                                        Score Matching Threshold
-                                    </span>
-                                </label>
-                                <Input type="number" min={0} placeholder="e.g., 75" {...register("auto_score_matching_threshold")} />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <Mail className="h-4 w-4 text-sky-500" />
-                                        Email Invite Threshold
-                                    </span>
-                                </label>
-                                <Input type="number" min={0} placeholder="e.g., 80" {...register("auto_email_invite_threshold")} />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                                        Shortlist Threshold
-                                    </span>
-                                </label>
-                                <Input type="number" min={0} placeholder="e.g., 85" {...register("auto_shortlisted_threshold")} />
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <XCircle className="h-4 w-4 text-rose-500" />
-                                        Denied Threshold
-                                    </span>
-                                </label>
-                                <Input type="number" min={0} placeholder="e.g., 50" {...register("auto_denied_threshold")} />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
-                        <div className="space-y-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <FileText className="h-4 w-4 text-indigo-500" />
-                                        Job Description
-                                    </span>
-                                </label>
-                                <Textarea placeholder="Describe the role and responsibilities..." {...register("description")} />
-                                {errors.description && (
-                                    <p className="text-xs text-red-500">{errors.description.message}</p>
-                                )}
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <ClipboardList className="h-4 w-4 text-amber-500" />
-                                        Job Requirements
-                                    </span>
-                                </label>
-                                <Textarea placeholder="List required skills and experience..." {...register("requirements")} />
-                                {errors.requirements && (
-                                    <p className="text-xs text-red-500">{errors.requirements.message}</p>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
-                        <div className="grid gap-4 md:grid-cols-2">
-                            <SkillTagInput
-                                label="Soft Skills"
-                                icon={<Sparkles className="h-4 w-4 text-purple-500" />}
-                                iconClassName=""
-                                values={softSkillsList}
-                                onChange={(next) => {
-                                    setValue("soft_skills", next.join(", "), {
-                                        shouldDirty: true,
-                                        shouldValidate: true,
-                                    });
-                                }}
-                                options={jobSoftSkillsOptions}
-                                placeholder="Type or select soft skills..."
-                                allowCustom
-                            />
-                            <SkillTagInput
-                                label="Technical Skills"
-                                icon={<Code2 className="h-4 w-4 text-slate-600 dark:text-slate-300" />}
-                                iconClassName=""
-                                values={technicalSkillsList}
-                                onChange={(next) => {
-                                    setValue("technical_skills", next.join(", "), {
-                                        shouldDirty: true,
-                                        shouldValidate: true,
-                                    });
-                                }}
-                                options={jobTechnicalSkillsOptions}
-                                placeholder="Type or select technical skills..."
-                                allowCustom
-                            />
-                            <div className="md:col-span-2">
-                                <SkillTagInput
-                                    label="Languages Required (Optional)"
-                                    icon={<Languages className="h-4 w-4 text-sky-500" />}
-                                    iconClassName=""
-                                    values={languagesList}
-                                    onChange={(next) => {
-                                        setValue("languages", next.join(", "), {
-                                            shouldDirty: true,
-                                            shouldValidate: true,
-                                        });
-                                    }}
-                                    options={jobLanguageOptions}
-                                    placeholder="Type or select languages..."
-                                    allowCustom
-                                />
-                            </div>
-                            <div className="space-y-2 md:col-span-2">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    <span className="inline-flex items-center gap-2">
-                                        <Award className="h-4 w-4 text-amber-500" />
-                                        Certifications (Optional)
-                                    </span>
-                                </label>
-                                <Textarea placeholder="e.g., PMP, Scrum Master" {...register("certifications")} />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="flex justify-end gap-3">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => {
-                                reset();
-                                setValue("soft_skills", "", { shouldDirty: false, shouldValidate: true });
-                                setValue("technical_skills", "", { shouldDirty: false, shouldValidate: true });
-                                setValue("languages", "", { shouldDirty: false, shouldValidate: true });
-                                if (typeof window !== "undefined") {
-                                    window.localStorage.removeItem(DRAFT_KEY);
-                                }
-                            }}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            type="submit"
-                            disabled={loadingCreateJob || isSubmitting || !isValid || !isDirty}
-                            className="rounded-md bg-linear-to-r from-[#009ad5] to-[#005ca9] text-white hover:from-[#009ad5]/90 hover:to-[#005ca9]/90"
-                        >
-                            {loadingCreateJob ? "Posting..." : "Post Job"}
-                        </Button>
-                    </div>
-                </form>
-            ) : (
+            <form
+                className="space-y-6"
+                onSubmit={handleSubmit(onSubmit, handleInvalid)}
+            >
                 <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
-                    <h3 className="text-base font-semibold text-blue-700 dark:text-slate-100">
-                        AI Prompt
-                    </h3>
-                    <p className="mt-1 text-sm text-blue-600 dark:text-slate-300">
-                        Add an AI prompt to guide how resumes are evaluated for this job. You can skip it.
-                    </p>
-                    <form className="mt-6 space-y-4" onSubmit={handlePromptSubmit(handleInlinePromptSubmit)}>
-                        <div className="space-y-2">
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2 md:col-span-2">
                             <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                Target
+                                <span className="inline-flex items-center gap-2">
+                                    <Briefcase className="h-4 w-4 text-[#005ca9]" />
+                                    Job Title
+                                </span>
                             </label>
-                            <Input placeholder="e.g., resume" {...registerPrompt("target")} />
-                            {promptErrors.target && (
-                                <p className="text-xs text-red-500">{promptErrors.target.message}</p>
+                            <Input placeholder="e.g., Senior Frontend Developer" {...register("title")} />
+                            {errors.title && (
+                                <p className="text-xs text-red-500">{errors.title.message}</p>
                             )}
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                Prompt
+                                <span className="inline-flex items-center gap-2">
+                                    <Users className="h-4 w-4 text-indigo-500" />
+                                    Employment Type
+                                </span>
                             </label>
-                            <Textarea
-                                placeholder="Describe how the AI should evaluate candidates..."
-                                className="min-h-[120px]"
-                                {...registerPrompt("prompt")}
+                            <Controller
+                                control={control}
+                                name="employment_type"
+                                render={({ field }) => (
+                                    <Select
+                                        onValueChange={field.onChange}
+                                        value={field.value}
+                                    >
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="Select employment type..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {selectOptions.employment.map((option) => (
+                                                <SelectItem key={option.value} value={option.value}>
+                                                    {option.label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
                             />
-                            {promptErrors.prompt && (
-                                <p className="text-xs text-red-500">{promptErrors.prompt.message}</p>
+                            {errors.employment_type && (
+                                <p className="text-xs text-red-500">
+                                    {errors.employment_type.message}
+                                </p>
                             )}
                         </div>
-                        <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
-                                    Evaluation items
-                                </label>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <Building2 className="h-4 w-4 text-emerald-500" />
+                                    Workplace Type
+                                </span>
+                            </label>
+                            <Controller
+                                control={control}
+                                name="workplace_type"
+                                render={({ field }) => (
+                                    <Select
+                                        onValueChange={field.onChange}
+                                        value={field.value}
+                                    >
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="Select workplace type..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {selectOptions.workplace.map((option) => (
+                                                <SelectItem key={option.value} value={option.value}>
+                                                    {option.label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                            />
+                            {errors.workplace_type && (
+                                <p className="text-xs text-red-500">
+                                    {errors.workplace_type.message}
+                                </p>
+                            )}
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <BarChart3 className="h-4 w-4 text-amber-500" />
+                                    Seniority Level
+                                </span>
+                            </label>
+                            <Controller
+                                control={control}
+                                name="seniority_level"
+                                render={({ field }) => (
+                                    <Select
+                                        onValueChange={field.onChange}
+                                        value={field.value}
+                                    >
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="Select seniority level..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {selectOptions.seniority.map((option) => (
+                                                <SelectItem key={option.value} value={option.value}>
+                                                    {option.label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                            />
+                            {errors.seniority_level && (
+                                <p className="text-xs text-red-500">
+                                    {errors.seniority_level.message}
+                                </p>
+                            )}
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <Building2 className="h-4 w-4 text-sky-500" />
+                                    Industry
+                                </span>
+                            </label>
+                            <Controller
+                                control={control}
+                                name="industry"
+                                render={({ field }) => (
+                                    <Select
+                                        onValueChange={field.onChange}
+                                        value={field.value}
+                                    >
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="Select industry..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {selectOptions.industry.map((option) => (
+                                                <SelectItem key={option.value} value={option.value}>
+                                                    {option.label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                            />
+                            {errors.industry && (
+                                <p className="text-xs text-red-500">{errors.industry.message}</p>
+                            )}
+                        </div>
+                        <div className="space-y-2 md:col-span-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <MapPin className="h-4 w-4 text-rose-500" />
+                                    Location
+                                </span>
+                            </label>
+                            <Input placeholder="e.g., Cairo, Egypt" {...register("location")} />
+                            {errors.location && (
+                                <p className="text-xs text-red-500">{errors.location.message}</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <DollarSign className="h-4 w-4 text-emerald-600" />
+                                    Salary Currency
+                                </span>
+                            </label>
+                            <Controller
+                                control={control}
+                                name="salary_currency"
+                                render={({ field }) => (
+                                    <Select onValueChange={field.onChange} value={field.value}>
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="Select salary currency..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            {selectOptions.currency.map((option) => (
+                                                <SelectItem key={option.value} value={option.value}>
+                                                    {option.label}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                            />
+                            {errors.salary_currency && (
+                                <p className="text-xs text-red-500">
+                                    {errors.salary_currency.message}
+                                </p>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-[#009ad5]"
+                                {...register("is_salary_negotiable")}
+                            />
+                            <span className="text-sm text-slate-600 dark:text-slate-300">
+                                Salary negotiable
+                            </span>
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <DollarSign className="h-4 w-4 text-emerald-600" />
+                                    Minimum Salary
+                                </span>
+                            </label>
+                            <Input type="number" min={0} placeholder="e.g., 1200" {...register("salary_from")} />
+                            {errors.salary_from && (
+                                <p className="text-xs text-red-500">{errors.salary_from.message}</p>
+                            )}
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <DollarSign className="h-4 w-4 text-emerald-600" />
+                                    Maximum Salary
+                                </span>
+                            </label>
+                            <Input type="number" min={0} placeholder="e.g., 2000" {...register("salary_to")} />
+                            {errors.salary_to && (
+                                <p className="text-xs text-red-500">{errors.salary_to.message}</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <BarChart3 className="h-4 w-4 text-indigo-500" />
+                                    Score Matching Threshold
+                                </span>
+                            </label>
+                            <Input type="number" min={0} placeholder="e.g., 75" {...register("auto_score_matching_threshold")} />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <Mail className="h-4 w-4 text-sky-500" />
+                                    Email Invite Threshold
+                                </span>
+                            </label>
+                            <Input type="number" min={0} placeholder="e.g., 80" {...register("auto_email_invite_threshold")} />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                                    Shortlist Threshold
+                                </span>
+                            </label>
+                            <Input type="number" min={0} placeholder="e.g., 85" {...register("auto_shortlisted_threshold")} />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <XCircle className="h-4 w-4 text-rose-500" />
+                                    Denied Threshold
+                                </span>
+                            </label>
+                            <Input type="number" min={0} placeholder="e.g., 50" {...register("auto_denied_threshold")} />
+                        </div>
+                    </div>
+                </div>
+
+                <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
+                    <div className="space-y-4">
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <FileText className="h-4 w-4 text-indigo-500" />
+                                    Job Description
+                                </span>
+                            </label>
+                            <Controller
+                                name="description"
+                                control={control}
+                                render={({ field }) => (
+                                    <RetraceTextEditor
+                                        value={field.value ?? ""}
+                                        onChange={field.onChange}
+                                        placeholder="Describe the role and responsibilities..."
+                                    />
+                                )}
+                            />
+                            <div className="flex flex-wrap gap-2">
                                 <Button
                                     type="button"
                                     variant="outline"
-                                    onClick={() => appendPrompt({ key: "", value: "" })}
+                                    disabled={loadingGenerateDescription || missingAiFields.length > 0}
+                                    onClick={() => handleGenerate("description")}
                                 >
-                                    Add item
+                                    <span className="inline-flex items-center gap-2">
+                                        <Sparkles className="h-4 w-4" />
+                                        {loadingGenerateDescription
+                                            ? "Generating..."
+                                            : "Generate description"}
+                                    </span>
                                 </Button>
                             </div>
-                            {promptFields.map((field, index) => (
-                                <div key={field.id} className="rounded-md border border-blue-100 p-3">
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium text-slate-600">
-                                                Key
-                                            </label>
-                                            <Input
-                                                placeholder="e.g., experience"
-                                                {...registerPrompt(`evaluation.${index}.key`)}
-                                            />
-                                            {promptErrors.evaluation?.[index]?.key && (
-                                                <p className="text-xs text-red-500">
-                                                    {promptErrors.evaluation[index]?.key?.message}
-                                                </p>
-                                            )}
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-medium text-slate-600">
-                                                Value
-                                            </label>
-                                            <Input
-                                                placeholder="e.g., 3+ years"
-                                                {...registerPrompt(`evaluation.${index}.value`)}
-                                            />
-                                            {promptErrors.evaluation?.[index]?.value && (
-                                                <p className="text-xs text-red-500">
-                                                    {promptErrors.evaluation[index]?.value?.message}
-                                                </p>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="mt-3 flex justify-end">
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            className="text-red-600 hover:text-red-700"
-                                            onClick={() => removePrompt(index)}
-                                        >
-                                            Remove
-                                        </Button>
-                                    </div>
-                                </div>
-                            ))}
-                            {promptErrors.evaluation &&
-                                typeof promptErrors.evaluation?.message === "string" && (
-                                    <p className="text-xs text-red-500">
-                                        {promptErrors.evaluation.message}
-                                    </p>
+                            {errors.description && (
+                                <p className="text-xs text-red-500">{errors.description.message}</p>
+                            )}
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <ClipboardList className="h-4 w-4 text-amber-500" />
+                                    Job Requirements
+                                </span>
+                            </label>
+                            <Controller
+                                name="requirements"
+                                control={control}
+                                render={({ field }) => (
+                                    <RetraceTextEditor
+                                        value={field.value ?? ""}
+                                        onChange={field.onChange}
+                                        placeholder="List required skills and experience..."
+                                    />
                                 )}
+                            />
+                            <div className="flex flex-wrap gap-2">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    disabled={loadingGenerateRequirements || missingAiFields.length > 0}
+                                    onClick={() => handleGenerate("requirements")}
+                                >
+                                    <span className="inline-flex items-center gap-2">
+                                        <Sparkles className="h-4 w-4" />
+                                        {loadingGenerateRequirements
+                                            ? "Generating..."
+                                            : "Generate requirements"}
+                                    </span>
+                                </Button>
+                            </div>
+                            {errors.requirements && (
+                                <p className="text-xs text-red-500">{errors.requirements.message}</p>
+                            )}
                         </div>
-                        <div className="flex justify-end gap-3">
-                            <Button type="button" variant="outline" onClick={() => resetPrompt()}>
-                                Clear
-                            </Button>
-                            <Button
-                                type="submit"
-                                disabled={loadingCreatePrompt || !isPromptValid || !isPromptDirty}
-                                className="rounded-md bg-linear-to-r from-[#009ad5] to-[#005ca9] text-white hover:from-[#009ad5]/90 hover:to-[#005ca9]/90"
-                            >
-                                {loadingCreatePrompt ? "Saving..." : "Save AI Prompt"}
-                            </Button>
-                        </div>
-                    </form>
+                    </div>
                 </div>
-            )}
 
+                <details className="rounded-md border border-blue-200 bg-white shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
+                    <summary className="cursor-pointer px-6 py-4 text-sm font-semibold text-blue-700 dark:text-slate-200">
+                        Optional details
+                    </summary>
+                    <div className="space-y-6 border-t border-blue-100 px-6 py-6 dark:border-slate-700/60">
+                        <div className="space-y-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                    Company Overview (Optional)
+                                </label>
+                                <Controller
+                                    name="company_overview"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="Share a brief company overview..."
+                                        />
+                                    )}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                    Role Overview (Optional)
+                                </label>
+                                <Controller
+                                    name="role_overview"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="Summarize the role and its impact..."
+                                        />
+                                    )}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                    Responsibilities (Optional)
+                                </label>
+                                <Controller
+                                    name="responsibilities"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="List the key responsibilities..."
+                                        />
+                                    )}
+                                />
+                            </div>
+                        </div>
+                        <div className="space-y-4">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                    Nice to Have (Optional)
+                                </label>
+                                <Controller
+                                    name="nice_to_have"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="Share nice-to-have skills or experience..."
+                                        />
+                                    )}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                    What We Offer (Optional)
+                                </label>
+                                <Controller
+                                    name="what_we_offer"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="Describe what you offer candidates..."
+                                        />
+                                    )}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                    Job Benefits (Optional)
+                                </label>
+                                <Controller
+                                    name="job_benefits"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="List benefits and perks..."
+                                        />
+                                    )}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </details>
+
+                <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <SkillTagInput
+                            label="Soft Skills"
+                            icon={<Sparkles className="h-4 w-4 text-purple-500" />}
+                            iconClassName=""
+                            values={softSkillsList}
+                            onChange={(next) => {
+                                setValue("soft_skills", next.join(", "), {
+                                    shouldDirty: true,
+                                    shouldValidate: true,
+                                });
+                            }}
+                            options={jobSoftSkillsOptions}
+                            placeholder="Type or select soft skills..."
+                            allowCustom
+                        />
+                        <SkillTagInput
+                            label="Technical Skills"
+                            icon={<Code2 className="h-4 w-4 text-slate-600 dark:text-slate-300" />}
+                            iconClassName=""
+                            values={technicalSkillsList}
+                            onChange={(next) => {
+                                setValue("technical_skills", next.join(", "), {
+                                    shouldDirty: true,
+                                    shouldValidate: true,
+                                });
+                            }}
+                            options={jobTechnicalSkillsOptions}
+                            placeholder="Type or select technical skills..."
+                            allowCustom
+                        />
+                        <div className="md:col-span-2">
+                            <SkillTagInput
+                                label="Languages Required (Optional)"
+                                icon={<Languages className="h-4 w-4 text-sky-500" />}
+                                iconClassName=""
+                                values={languagesList}
+                                onChange={(next) => {
+                                    setValue("languages", next.join(", "), {
+                                        shouldDirty: true,
+                                        shouldValidate: true,
+                                    });
+                                }}
+                                options={jobLanguageOptions}
+                                placeholder="Type or select languages..."
+                                allowCustom
+                            />
+                        </div>
+                        <div className="space-y-2 md:col-span-2">
+                            <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                <span className="inline-flex items-center gap-2">
+                                    <Award className="h-4 w-4 text-amber-500" />
+                                    Certifications (Optional)
+                                </span>
+                            </label>
+                            <Textarea placeholder="e.g., PMP, Scrum Master" {...register("certifications")} />
+                        </div>
+                    </div>
+                </div>
+
+                {errorSummary.length > 0 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-100">
+                        <p className="text-sm font-semibold">Fix these before posting:</p>
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+                            {errorSummary.map((item) => (
+                                <li key={item}>{item}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+                <div className="flex justify-end gap-3">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                            reset();
+                            setValue("soft_skills", "", { shouldDirty: false, shouldValidate: true });
+                            setValue("technical_skills", "", { shouldDirty: false, shouldValidate: true });
+                            setValue("languages", "", { shouldDirty: false, shouldValidate: true });
+                            if (typeof window !== "undefined") {
+                                window.localStorage.removeItem(DRAFT_KEY);
+                            }
+                        }}
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        type="submit"
+                        disabled={loadingCreateJob || isSubmitting || !isValid || !isDirty}
+                        className="rounded-md bg-linear-to-r from-[#009ad5] to-[#005ca9] text-white hover:from-[#009ad5]/90 hover:to-[#005ca9]/90"
+                    >
+                        {loadingCreateJob ? "Posting..." : "Post Job"}
+                    </Button>
+                </div>
+            </form>
             <JobAiPromptModal
                 open={promptOpen}
                 onOpenChange={setPromptOpen}
@@ -875,4 +968,3 @@ const AddJobForm = () => {
 };
 
 export default AddJobForm;
-

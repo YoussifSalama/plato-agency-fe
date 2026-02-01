@@ -17,6 +17,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import RetraceTextEditor from "@/shared/components/common/RetraceTextEditor";
 import {
     Select,
     SelectContent,
@@ -77,6 +78,12 @@ const jobSchema = z
         description: z.string().min(1, "Job description is required."),
         requirements: z.string().min(1, "Job requirements are required."),
         certifications: z.union([z.literal(""), z.string()]).optional(),
+        company_overview: z.union([z.literal(""), z.string()]).optional(),
+        role_overview: z.union([z.literal(""), z.string()]).optional(),
+        responsibilities: z.union([z.literal(""), z.string()]).optional(),
+        nice_to_have: z.union([z.literal(""), z.string()]).optional(),
+        what_we_offer: z.union([z.literal(""), z.string()]).optional(),
+        job_benefits: z.union([z.literal(""), z.string()]).optional(),
         auto_score_matching_threshold: z.preprocess(
             numberOrUndefined,
             z.number().min(0).optional()
@@ -129,10 +136,13 @@ const JobWatchForm = () => {
         loadingUpdateJob,
         loadingToggleActive,
         loadingUpsertPrompt,
+        loadingGenerateDescription,
+        loadingGenerateRequirements,
         getJobById,
         updateJob,
         setJobActiveStatus,
         upsertJobAiPrompt,
+        generateJobContent,
     } = useJobStore();
 
     const {
@@ -140,6 +150,7 @@ const JobWatchForm = () => {
         handleSubmit,
         control,
         setValue,
+        getValues,
         reset,
         formState: { errors, isValid, isDirty, isSubmitting },
     } = useForm<JobFormValues>({
@@ -157,6 +168,12 @@ const JobWatchForm = () => {
             description: "",
             requirements: "",
             certifications: "",
+            company_overview: "",
+            role_overview: "",
+            responsibilities: "",
+            nice_to_have: "",
+            what_we_offer: "",
+            job_benefits: "",
             auto_score_matching_threshold: undefined,
             auto_email_invite_threshold: undefined,
             auto_shortlisted_threshold: undefined,
@@ -228,6 +245,12 @@ const JobWatchForm = () => {
             description: job.description ?? "",
             requirements: job.requirements ?? "",
             certifications: job.certifications ?? "",
+            company_overview: job.company_overview ?? "",
+            role_overview: job.role_overview ?? "",
+            responsibilities: job.responsibilities ?? "",
+            nice_to_have: job.nice_to_have ?? "",
+            what_we_offer: job.what_we_offer ?? "",
+            job_benefits: job.job_benefits ?? "",
             auto_score_matching_threshold: job.auto_score_matching_threshold ?? undefined,
             auto_email_invite_threshold: job.auto_email_invite_threshold ?? undefined,
             auto_shortlisted_threshold: job.auto_shortlisted_threshold ?? undefined,
@@ -268,6 +291,33 @@ const JobWatchForm = () => {
         []
     );
 
+    const buildAiPayload = (target: "description" | "requirements") => {
+        const values = getValues();
+        return {
+            title: values.title?.trim() ?? "",
+            seniority_level: values.seniority_level ?? "",
+            industry: values.industry ?? "",
+            employment_type: values.employment_type ?? "",
+            workplace_type: values.workplace_type ?? "",
+            location: values.location ?? "",
+            technical_skills: technicalSkillsList,
+            soft_skills: softSkillsList,
+            target,
+        };
+    };
+
+    const resolveMissingAiFields = () => {
+        const values = getValues();
+        const missing: string[] = [];
+        if (!values.title?.trim()) missing.push("job title");
+        if (!values.employment_type) missing.push("employment type");
+        if (!values.workplace_type) missing.push("workplace type");
+        if (!values.industry) missing.push("industry");
+        if (!values.seniority_level) missing.push("seniority level");
+        if (!values.location) missing.push("location");
+        return missing;
+    };
+
     const handleInvalid: SubmitErrorHandler<JobFormValues> = () => {
         warningToast("Please fix the highlighted errors before submitting.");
     };
@@ -289,6 +339,12 @@ const JobWatchForm = () => {
             description: parsed.description,
             requirements: parsed.requirements,
             certifications: parsed.certifications?.trim() || "",
+            company_overview: parsed.company_overview?.trim() || undefined,
+            role_overview: parsed.role_overview?.trim() || undefined,
+            responsibilities: parsed.responsibilities?.trim() || undefined,
+            nice_to_have: parsed.nice_to_have?.trim() || undefined,
+            what_we_offer: parsed.what_we_offer?.trim() || undefined,
+            job_benefits: parsed.job_benefits?.trim() || undefined,
             auto_score_matching_threshold: parsed.auto_score_matching_threshold,
             auto_email_invite_threshold: parsed.auto_email_invite_threshold,
             auto_shortlisted_threshold: parsed.auto_shortlisted_threshold,
@@ -298,6 +354,30 @@ const JobWatchForm = () => {
             languages: languagesList,
         });
     };
+
+    const handleGenerate = async (target: "description" | "requirements") => {
+        const missing = resolveMissingAiFields();
+        if (missing.length > 0) {
+            warningToast(`Fill ${missing.join(", ")} before generating content.`);
+            return;
+        }
+        const payload = buildAiPayload(target);
+        const generated = await generateJobContent(payload);
+        if (!generated) return;
+        if (target === "description") {
+            setValue("description", generated.description, {
+                shouldDirty: true,
+                shouldValidate: true,
+            });
+        } else {
+            setValue("requirements", generated.requirements, {
+                shouldDirty: true,
+                shouldValidate: true,
+            });
+        }
+    };
+
+    const missingAiFields = resolveMissingAiFields();
 
     const onPromptSubmit: SubmitHandler<AiPromptFormValues> = async (values) => {
         if (!Number.isFinite(jobId)) return;
@@ -635,7 +715,32 @@ const JobWatchForm = () => {
                                         Job Description
                                     </span>
                                 </label>
-                                <Textarea placeholder="Describe the role and responsibilities..." {...register("description")} />
+                                <Controller
+                                    name="description"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="Describe the role and responsibilities..."
+                                        />
+                                    )}
+                                />
+                                <div className="flex flex-wrap gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        disabled={loadingGenerateDescription || missingAiFields.length > 0}
+                                        onClick={() => handleGenerate("description")}
+                                    >
+                                        <span className="inline-flex items-center gap-2">
+                                            <Sparkles className="h-4 w-4" />
+                                            {loadingGenerateDescription
+                                                ? "Generating..."
+                                                : "Generate description"}
+                                        </span>
+                                    </Button>
+                                </div>
                                 {errors.description && (
                                     <p className="text-xs text-red-500">{errors.description.message}</p>
                                 )}
@@ -647,13 +752,146 @@ const JobWatchForm = () => {
                                         Job Requirements
                                     </span>
                                 </label>
-                                <Textarea placeholder="List required skills and experience..." {...register("requirements")} />
+                                <Controller
+                                    name="requirements"
+                                    control={control}
+                                    render={({ field }) => (
+                                        <RetraceTextEditor
+                                            value={field.value ?? ""}
+                                            onChange={field.onChange}
+                                            placeholder="List required skills and experience..."
+                                        />
+                                    )}
+                                />
+                                <div className="flex flex-wrap gap-2">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        disabled={loadingGenerateRequirements || missingAiFields.length > 0}
+                                        onClick={() => handleGenerate("requirements")}
+                                    >
+                                        <span className="inline-flex items-center gap-2">
+                                            <Sparkles className="h-4 w-4" />
+                                            {loadingGenerateRequirements
+                                                ? "Generating..."
+                                                : "Generate requirements"}
+                                        </span>
+                                    </Button>
+                                </div>
                                 {errors.requirements && (
                                     <p className="text-xs text-red-500">{errors.requirements.message}</p>
                                 )}
                             </div>
                         </div>
                     </div>
+
+                    <details className="rounded-md border border-blue-200 bg-white shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
+                        <summary className="cursor-pointer px-6 py-4 text-sm font-semibold text-blue-700 dark:text-slate-200">
+                            Optional details
+                        </summary>
+                        <div className="space-y-6 border-t border-blue-100 px-6 py-6 dark:border-slate-700/60">
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                        Company Overview (Optional)
+                                    </label>
+                                    <Controller
+                                        name="company_overview"
+                                        control={control}
+                                        render={({ field }) => (
+                                            <RetraceTextEditor
+                                                value={field.value ?? ""}
+                                                onChange={field.onChange}
+                                                placeholder="Share a brief company overview..."
+                                            />
+                                        )}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                        Role Overview (Optional)
+                                    </label>
+                                    <Controller
+                                        name="role_overview"
+                                        control={control}
+                                        render={({ field }) => (
+                                            <RetraceTextEditor
+                                                value={field.value ?? ""}
+                                                onChange={field.onChange}
+                                                placeholder="Summarize the role and its impact..."
+                                            />
+                                        )}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                        Responsibilities (Optional)
+                                    </label>
+                                    <Controller
+                                        name="responsibilities"
+                                        control={control}
+                                        render={({ field }) => (
+                                            <RetraceTextEditor
+                                                value={field.value ?? ""}
+                                                onChange={field.onChange}
+                                                placeholder="List the key responsibilities..."
+                                            />
+                                        )}
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                        Nice to Have (Optional)
+                                    </label>
+                                    <Controller
+                                        name="nice_to_have"
+                                        control={control}
+                                        render={({ field }) => (
+                                            <RetraceTextEditor
+                                                value={field.value ?? ""}
+                                                onChange={field.onChange}
+                                                placeholder="Share nice-to-have skills or experience..."
+                                            />
+                                        )}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                        What We Offer (Optional)
+                                    </label>
+                                    <Controller
+                                        name="what_we_offer"
+                                        control={control}
+                                        render={({ field }) => (
+                                            <RetraceTextEditor
+                                                value={field.value ?? ""}
+                                                onChange={field.onChange}
+                                                placeholder="Describe what you offer candidates..."
+                                            />
+                                        )}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium text-blue-700 dark:text-slate-200">
+                                        Job Benefits (Optional)
+                                    </label>
+                                    <Controller
+                                        name="job_benefits"
+                                        control={control}
+                                        render={({ field }) => (
+                                            <RetraceTextEditor
+                                                value={field.value ?? ""}
+                                                onChange={field.onChange}
+                                                placeholder="List benefits and perks..."
+                                            />
+                                        )}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </details>
 
                     <div className="rounded-md border border-blue-200 bg-white p-6 shadow-xl shadow-blue-200/60 dark:border-slate-700/60 dark:bg-slate-900 dark:shadow-none">
                         <div className="grid gap-4 md:grid-cols-2">
@@ -770,10 +1008,13 @@ const JobWatchForm = () => {
                                 </Button>
                             </div>
                             {promptFields.map((field, index) => (
-                                <div key={field.id} className="rounded-md border border-blue-100 p-3">
+                                <div
+                                    key={field.id}
+                                    className="w-full rounded-md border border-blue-100 bg-white p-3 dark:border-slate-700/60 dark:bg-slate-900/60"
+                                >
                                     <div className="grid gap-3 sm:grid-cols-2">
                                         <div className="space-y-2">
-                                            <label className="text-xs font-medium text-slate-600">
+                                            <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
                                                 Key
                                             </label>
                                             <Input
@@ -787,7 +1028,7 @@ const JobWatchForm = () => {
                                             )}
                                         </div>
                                         <div className="space-y-2">
-                                            <label className="text-xs font-medium text-slate-600">
+                                            <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
                                                 Value
                                             </label>
                                             <Input

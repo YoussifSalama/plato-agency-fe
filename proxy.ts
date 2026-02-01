@@ -4,8 +4,10 @@ import { ACCESS_TOKEN_KEY } from "@/lib/authTokens";
 
 export function proxy(request: NextRequest) {
     const { pathname } = request.nextUrl;
-    const isAuthRoute = pathname.startsWith("/auth");
-    const isOverviewRoute = pathname.startsWith("/overview");
+    const isOverviewRoute =
+        pathname.startsWith("/overview") || pathname.startsWith("/auth/overview");
+    const isAuthRoute =
+        pathname.startsWith("/auth") && !pathname.startsWith("/auth/overview");
     const isPublicFile =
         pathname.startsWith("/_next") ||
         pathname.startsWith("/favicon") ||
@@ -14,7 +16,11 @@ export function proxy(request: NextRequest) {
 
     const accessToken = request.cookies.get(ACCESS_TOKEN_KEY)?.value;
 
-    if (isAuthRoute || isOverviewRoute) {
+    if (isOverviewRoute) {
+        return NextResponse.next();
+    }
+
+    if (isAuthRoute) {
         if (accessToken) {
             const dashboardUrl = request.nextUrl.clone();
             dashboardUrl.pathname = "/";

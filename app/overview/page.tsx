@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import ThemeSwitch from "@/shared/components/layout/theme/ThemeSwitch";
 import useAgencyStore from "@/shared/store/pages/agency/useAgencyStore";
+import useAgency from "@/shared/store/useAgency";
 import { ACCESS_TOKEN_KEY } from "@/lib/authTokens";
 import Combobox from "@/shared/components/common/Combobox";
 import { companyIndustries, companySizes } from "@/shared/core/agency/options";
@@ -76,6 +77,7 @@ const OverviewPage = () => {
             ? Cookies.get(ACCESS_TOKEN_KEY) ?? null
             : null;
     const { getOverview, updateAgency, loadingUpdateAgency } = useAgencyStore();
+    const { getMyAgencyAccountData } = useAgency();
     const {
         register,
         handleSubmit,
@@ -115,6 +117,11 @@ const OverviewPage = () => {
             return;
         }
         const loadOverview = async () => {
+            const account = await getMyAgencyAccountData(accessToken);
+            if (account?.agencyId) {
+                router.push("/");
+                return;
+            }
             const response = await getOverview(accessToken);
             if (response?.isComplete) {
                 router.push("/");
@@ -132,7 +139,7 @@ const OverviewPage = () => {
             }
         };
         loadOverview();
-    }, [accessToken, getOverview, reset, router, trigger]);
+    }, [accessToken, getMyAgencyAccountData, getOverview, reset, router, trigger]);
 
     const handleCreateSubmit = async (values: OverviewFormValues) => {
         if (!accessToken) return;

@@ -1,4 +1,4 @@
-import { toast } from "react-toastify"
+import { toast } from "sonner";
 
 export const successToast = (message: string) => {
     toast.success(message);
@@ -13,5 +13,5 @@ export const warningToast = (message: string) => {
 };
 
 export const infoToast = (message: string) => {
-    toast.info(message);
+    toast(message);
 };

@@ -1,21 +1,46 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
 import Sidebar from "@/shared/components/layout/sidebar/Sidebar";
 import Navbar from "@/shared/components/layout/navbar/Navbar";
 import clsx from "clsx";
 import useAgency from "@/shared/store/useAgency";
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
+    const router = useRouter();
+    const pathname = usePathname();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-    const { account, getMyAgencyAccountData } = useAgency();
+    const {
+        account,
+        agencyStatus,
+        loadingAgencyStatus,
+        getMyAgencyAccountData,
+        getAgencyStatus,
+    } = useAgency();
 
     useEffect(() => {
         if (!account) {
             getMyAgencyAccountData();
         }
     }, [account, getMyAgencyAccountData]);
+
+    useEffect(() => {
+        getAgencyStatus();
+    }, [getAgencyStatus]);
+
+    const shouldBlock = useMemo(() => {
+        if (!agencyStatus || loadingAgencyStatus) return false;
+        return !agencyStatus.hasAgency;
+    }, [agencyStatus, loadingAgencyStatus]);
+
+    useEffect(() => {
+        if (!shouldBlock) return;
+        if (pathname.startsWith("/settings")) return;
+        router.push("/settings");
+    }, [pathname, router, shouldBlock]);
 
     return (
         <div
@@ -46,7 +71,24 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
                     }
                     isSidebarCollapsed={sidebarCollapsed}
                 />
-                <div className="mt-6">{children}</div>
+                {shouldBlock && !pathname.startsWith("/settings") && (
+                    <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-sm font-medium">
+                                Create or join an organization to unlock the employer dashboard.
+                            </p>
+                            <Link
+                                href="/settings"
+                                className="inline-flex items-center rounded-md bg-amber-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-700"
+                            >
+                                Go to settings
+                            </Link>
+                        </div>
+                    </div>
+                )}
+                <div className="mt-6">
+                    {shouldBlock && !pathname.startsWith("/settings") ? null : children}
+                </div>
             </main>
         </div>
     );

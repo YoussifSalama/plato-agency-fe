@@ -14,7 +14,12 @@ interface IAuthStore {
     loadingResetVerify: boolean;
     loadingResetConfirm: boolean;
     signup: (f_name: string, l_name: string, email: string, user_name: string, password: string) => Promise<boolean>;
-    login: (email: string, password: string) => Promise<{ access_token: string } | null>;
+    login: (
+        email: string,
+        password: string,
+        options?: { storeTokens?: boolean }
+    ) => Promise<{ access_token: string; refresh_token?: string } | null>;
+    storeTokens: (accessToken?: string | null, refreshToken?: string | null) => void;
     logout: () => Promise<void>;
     requestPasswordReset: (email: string) => Promise<boolean>;
     verifyPasswordResetOtp: (email: string, otp: string) => Promise<boolean>;
@@ -24,6 +29,19 @@ interface IAuthStore {
 }
 
 const useAuthStore = create<IAuthStore>((set) => {
+    const persistTokens = (accessToken?: string | null, refreshToken?: string | null) => {
+        if (accessToken) {
+            Cookies.set(ACCESS_TOKEN_KEY, accessToken);
+            localStorage.setItem("access_token", accessToken);
+        }
+        if (refreshToken) {
+            Cookies.set(REFRESH_TOKEN_KEY, refreshToken, {
+                expires: 7,
+            });
+            localStorage.setItem("refresh_token", refreshToken);
+        }
+    };
+
     return {
         isAuthenticated: false,
         loadingLogin: false,
@@ -45,7 +63,7 @@ const useAuthStore = create<IAuthStore>((set) => {
                     successToast(
                         resolveResponseMessage(
                             result,
-                            "Account created. Your data has been saved."
+                            "Account created. Please check your email for verification."
                         )
                     );
                     return true;
@@ -58,7 +76,11 @@ const useAuthStore = create<IAuthStore>((set) => {
                 set({ loadingSignup: false });
             }
         },
-        login: async (email, password) => {
+        storeTokens: (accessToken, refreshToken) => {
+            if (typeof window === "undefined") return;
+            persistTokens(accessToken ?? null, refreshToken ?? null);
+        },
+        login: async (email, password, options) => {
             set({ loadingLogin: true });
             try {
                 const result = await apiClient.post("/agency/login", { email, password });
@@ -68,17 +90,11 @@ const useAuthStore = create<IAuthStore>((set) => {
                         result.data?.access_token ?? result.data?.data?.access_token;
                     const refreshToken =
                         result.data?.refresh_token ?? result.data?.data?.refresh_token;
-                    if (accessToken) {
-                        Cookies.set(ACCESS_TOKEN_KEY, accessToken);
-                        localStorage.setItem("access_token", accessToken);
+                    const shouldStore = options?.storeTokens !== false;
+                    if (shouldStore && typeof window !== "undefined") {
+                        persistTokens(accessToken ?? null, refreshToken ?? null);
                     }
-                    if (refreshToken) {
-                        Cookies.set(REFRESH_TOKEN_KEY, refreshToken, {
-                            expires: 7,
-                        });
-                        localStorage.setItem("refresh_token", refreshToken);
-                    }
-                    if (accessToken) {
+                    if (accessToken && shouldStore) {
                         useAgency.getState().getMyAgencyAccountData(accessToken);
                     }
                     successToast(
@@ -87,7 +103,10 @@ const useAuthStore = create<IAuthStore>((set) => {
                             "Signed in successfully."
                         )
                     );
-                    return { access_token: accessToken ?? "" };
+                    return {
+                        access_token: accessToken ?? "",
+                        refresh_token: refreshToken,
+                    };
                 }
                 return null;
             } catch (error) {
