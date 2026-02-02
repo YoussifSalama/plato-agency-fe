@@ -41,6 +41,11 @@ interface IresumeStore {
     loadingGetResumes: boolean;
     hasLoadedResumes: boolean;
     loadingProcessResumes: boolean;
+    uploadStatus: "idle" | "uploading" | "completed" | "failed";
+    uploadTotal: number;
+    uploadUploaded: number;
+    uploadFailed: number;
+    lastUploadError: string | null;
     actionLoading: { id: string | number; type: "deny" | "shortlist" | "invite" } | null;
     getResumes: (
         partial_matching: string,
@@ -54,7 +59,15 @@ interface IresumeStore {
         autoShortlisted?: boolean | null,
         autoDenied?: boolean | null
     ) => Promise<void>;
-    processResumes: (files: File[], jobId: number) => Promise<number>;
+    processResumes: (
+        files: File[],
+        jobId: number,
+        callbacks?: {
+            onComplete?: () => void;
+            onFailed?: (message: string | null) => void;
+        }
+    ) => Promise<number>;
+    resetUploadState: () => void;
     denyResume: (id: string | number, value: boolean) => Promise<void>;
     shortlistResume: (id: string | number, value: boolean) => Promise<void>;
     inviteResume: (id: string | number) => Promise<void>;
@@ -72,6 +85,11 @@ export const useResumeStore = create<IresumeStore>((set) => {
         loadingGetResumes: false,
         hasLoadedResumes: false,
         loadingProcessResumes: false,
+        uploadStatus: "idle",
+        uploadTotal: 0,
+        uploadUploaded: 0,
+        uploadFailed: 0,
+        lastUploadError: null,
         actionLoading: null,
         getResumes: async (
             partial_matching: string,
@@ -131,27 +149,119 @@ export const useResumeStore = create<IresumeStore>((set) => {
             const meta = response.data?.meta ?? null;
             set({ resumes, meta, loadingGetResumes: false, hasLoadedResumes: true });
         },
-        processResumes: async (files: File[], jobId: number) => {
+        processResumes: async (files: File[], jobId: number, callbacks) => {
+            const { onComplete, onFailed } = callbacks ?? {};
             set({ loadingProcessResumes: true });
             try {
-                const formData = new FormData();
-                files.forEach((file) => formData.append("resumes", file));
-                formData.append("job_id", String(jobId));
                 const token = getToken();
                 if (!token) {
                     return 401;
                 }
-                const response = await apiClient.post("/resume/process", formData, {
-                    headers: {
-                        "Content-Type": "multipart/form-data",
-                        Authorization: `Bearer ${token}`,
-                    },
+                const chunkSize = 5;
+                const concurrency = 6;
+                const maxRetries = 3;
+                const baseDelayMs = 500;
+                set({
+                    uploadStatus: "uploading",
+                    uploadTotal: files.length,
+                    uploadUploaded: 0,
+                    uploadFailed: 0,
+                    lastUploadError: null,
                 });
-                return response.status;
+                const chunks: File[][] = [];
+                for (let i = 0; i < files.length; i += chunkSize) {
+                    chunks.push(files.slice(i, i + chunkSize));
+                }
+                const uploadChunk = async (chunk: File[]) => {
+                    const formData = new FormData();
+                    chunk.forEach((file) => formData.append("resumes", file));
+                    formData.append("job_id", String(jobId));
+                    const response = await apiClient.post("/resume/process", formData, {
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                        },
+                    });
+                    return response.status;
+                };
+                const sleep = (ms: number) =>
+                    new Promise((resolve) => setTimeout(resolve, ms));
+                const uploadWithRetry = async (chunk: File[]) => {
+                    let attempt = 0;
+                    while (attempt <= maxRetries) {
+                        try {
+                            const status = await uploadChunk(chunk);
+                            if (status !== 201) {
+                                throw new Error(`Upload failed with status ${status}`);
+                            }
+                            return true;
+                        } catch (error) {
+                            if (attempt === maxRetries) {
+                                throw error;
+                            }
+                            const delay =
+                                baseDelayMs * 2 ** attempt +
+                                Math.floor(Math.random() * 150);
+                            await sleep(delay);
+                            attempt += 1;
+                        }
+                    }
+                    return false;
+                };
+                const runQueue = async () => {
+                    let failedCount = 0;
+                    let lastErrorMessage: string | null = null;
+                    let cursor = 0;
+                    const workers = Array.from({ length: concurrency }, async () => {
+                        while (cursor < chunks.length) {
+                            const current = chunks[cursor];
+                            cursor += 1;
+                            try {
+                                await uploadWithRetry(current);
+                                set((state) => ({
+                                    uploadUploaded: state.uploadUploaded + current.length,
+                                }));
+                            } catch (error) {
+                                lastErrorMessage =
+                                    (error as Error)?.message ??
+                                    "Upload failed. Please retry.";
+                                failedCount += current.length;
+                                set((state) => ({
+                                    uploadFailed: state.uploadFailed + current.length,
+                                    lastUploadError: lastErrorMessage,
+                                }));
+                            }
+                        }
+                    });
+                    await Promise.all(workers);
+                    const finalStatus = failedCount > 0 ? "failed" : "completed";
+                    set({
+                        uploadStatus: finalStatus,
+                        loadingProcessResumes: false,
+                    });
+                    if (finalStatus === "completed") {
+                        onComplete?.();
+                    } else {
+                        onFailed?.(lastErrorMessage);
+                    }
+                };
+                void runQueue();
+                return 202;
             } finally {
-                set({ loadingProcessResumes: false });
+                set((state) =>
+                    state.uploadStatus === "uploading"
+                        ? state
+                        : { loadingProcessResumes: false }
+                );
             }
         },
+        resetUploadState: () =>
+            set({
+                uploadStatus: "idle",
+                uploadTotal: 0,
+                uploadUploaded: 0,
+                uploadFailed: 0,
+                lastUploadError: null,
+            }),
         denyResume: async (id, value) => {
             const token = getToken();
             if (!token) return;

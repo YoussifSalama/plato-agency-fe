@@ -52,8 +52,11 @@ apiClient.interceptors.response.use(
     (response) => response,
     async (error) => {
         const originalRequest = error.config;
+        const status = error.response?.status;
+        const shouldRefresh =
+            status === 401 || status === 403 || status === 409;
         if (
-            error.response?.status !== 401 ||
+            !shouldRefresh ||
             originalRequest?._retry ||
             originalRequest?.url?.includes("/agency/token/refresh")
         ) {
@@ -103,7 +106,16 @@ apiClient.interceptors.response.use(
             if (newAccessToken) {
                 Cookies.set(ACCESS_TOKEN_KEY, newAccessToken);
                 runRefreshQueue(newAccessToken);
-                originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+                const headers = originalRequest.headers ?? {};
+                if (typeof (headers as { set?: (key: string, value: string) => void }).set === "function") {
+                    (headers as { set: (key: string, value: string) => void }).set(
+                        "Authorization",
+                        `Bearer ${newAccessToken}`
+                    );
+                } else {
+                    (headers as Record<string, string>).Authorization = `Bearer ${newAccessToken}`;
+                }
+                originalRequest.headers = headers;
                 return apiClient(originalRequest);
             }
             runRefreshQueue();

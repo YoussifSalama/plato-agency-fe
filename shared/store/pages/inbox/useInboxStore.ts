@@ -48,6 +48,7 @@ interface IInboxStore {
     archiveInbox: (id: number, accessToken?: string | null) => Promise<boolean>;
     unarchiveInbox: (id: number, accessToken?: string | null) => Promise<boolean>;
     markInboxRead: (id: number, accessToken?: string | null) => Promise<boolean>;
+    markAllRead: (accessToken?: string | null) => Promise<boolean>;
 }
 
 const getToken = (accessToken?: string | null) => {
@@ -134,6 +135,23 @@ const useInboxStore = create<IInboxStore>((set) => ({
             return true;
         } catch (error) {
             errorToast(resolveErrorMessage(error, "Couldn't mark inbox as read."));
+            return false;
+        } finally {
+            set({ inboxActionLoading: null });
+        }
+    },
+    markAllRead: async (accessToken) => {
+        const token = getToken(accessToken);
+        if (!token) return false;
+        set({ inboxActionLoading: -1 });
+        try {
+            const response = await apiClient.patch("/agency/inbox/read-all", null, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            infoToast(resolveResponseMessage(response, "All inbox items marked as read."));
+            return true;
+        } catch (error) {
+            errorToast(resolveErrorMessage(error, "Couldn't mark all inboxes as read."));
             return false;
         } finally {
             set({ inboxActionLoading: null });

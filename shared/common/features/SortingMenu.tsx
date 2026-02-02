@@ -32,11 +32,13 @@ const SortingMenu = ({
     value,
     onChange,
     placeholder = "Sort by",
+    triggerClassName,
 }: {
     options: SortOption[];
     value?: SortOption;
     onChange: (key: string, value: SortOrder) => void;
     placeholder?: string;
+    triggerClassName?: string;
 }) => {
     const selectedValue = value ? `${value.key}:${value.value}` : undefined;
 
@@ -54,6 +56,7 @@ const SortingMenu = ({
                     "w-full rounded-md border border-blue-200 bg-white p-2 text-blue-700 shadow-sm",
                     "focus-visible:border-blue-400 focus-visible:ring-blue-100 focus-visible:ring-2",
                     "dark:border-slate-700/60 dark:bg-slate-900 dark:text-slate-100 dark:focus-visible:ring-slate-700/60",
+                    triggerClassName
                 )}
             >
                 <SelectValue placeholder={placeholder} />

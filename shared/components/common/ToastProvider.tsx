@@ -12,6 +12,7 @@ import { toast } from "sonner";
 const ToastProvider = () => {
     const router = useRouter();
     const socketRef = useRef<Socket | null>(null);
+    const isConnectingRef = useRef(false);
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     const playNotificationSound = async () => {
@@ -24,12 +25,14 @@ const ToastProvider = () => {
     };
 
     useEffect(() => {
-        const token = Cookies.get(ACCESS_TOKEN_KEY);
-        if (!token) return;
-
         let isActive = true;
+        let retryTimer: ReturnType<typeof setInterval> | null = null;
 
         const connectSocket = async () => {
+            if (!isActive || socketRef.current || isConnectingRef.current) return;
+            const token = Cookies.get(ACCESS_TOKEN_KEY);
+            if (!token) return;
+            isConnectingRef.current = true;
             try {
                 const response = await apiClient.get("/agency/inbox/agency", {
                     headers: { Authorization: `Bearer ${token}` },
@@ -67,13 +70,19 @@ const ToastProvider = () => {
                 });
             } catch {
                 // ignore connection failures
+            } finally {
+                isConnectingRef.current = false;
             }
         };
 
-        connectSocket();
+        void connectSocket();
+        retryTimer = setInterval(() => {
+            void connectSocket();
+        }, 2000);
 
         return () => {
             isActive = false;
+            if (retryTimer) clearInterval(retryTimer);
             socketRef.current?.disconnect();
             socketRef.current = null;
         };

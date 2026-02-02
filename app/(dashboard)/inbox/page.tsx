@@ -66,6 +66,7 @@ const InboxPage = () => {
         archiveInbox,
         unarchiveInbox,
         markInboxRead,
+        markAllRead,
     } = useInboxStore();
     const [status, setStatus] = useState<InboxStatus>("unread");
     const [typeFilter, setTypeFilter] = useState<InboxType | "">("");
@@ -131,6 +132,14 @@ const InboxPage = () => {
         }
     };
 
+    const handleMarkAllRead = async () => {
+        const done = await markAllRead();
+        if (done) {
+            getInboxes(status, sortBy, sortOrder, 1, typeFilter);
+        }
+    };
+    const controlClassName = "h-9 w-full sm:w-[220px] px-3 text-xs";
+
     const renderSkeleton = () => (
         <div className="space-y-3">
             {Array.from({ length: 5 }).map((_, index) => (
@@ -176,13 +185,14 @@ const InboxPage = () => {
                     })}
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <select
+                    {/* <select
                         value={typeFilter}
                         onChange={(event) => setTypeFilter(event.target.value as InboxType | "")}
                         className={clsx(
                             "w-full rounded-md border border-blue-200 bg-white p-2 text-xs text-blue-700 shadow-sm",
                             "focus-visible:border-blue-400 focus-visible:ring-2 focus-visible:ring-blue-100",
-                            "dark:border-slate-700/60 dark:bg-slate-900 dark:text-slate-100 dark:focus-visible:ring-slate-700/60"
+                            "dark:border-slate-700/60 dark:bg-slate-900 dark:text-slate-100 dark:focus-visible:ring-slate-700/60",
+                            controlClassName
                         )}
                     >
                         {typeOptions.map((option) => (
@@ -190,8 +200,20 @@ const InboxPage = () => {
                                 {option.label}
                             </option>
                         ))}
-                    </select>
-                    <div className="min-w-[220px]">
+                    </select> */}
+                    {status === "unread" && inboxes.length > 0 && (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleMarkAllRead}
+                            disabled={loadingInboxes || inboxActionLoading === -1}
+                            className={clsx(controlClassName, "justify-center")}
+                        >
+                            {inboxActionLoading === -1 ? "Marking..." : "Mark all as read"}
+                        </Button>
+                    )}
+                    <div className="w-full sm:w-[220px]">
                         <SortingMenu
                             options={sortOptions}
                             value={activeSort}
@@ -200,6 +222,7 @@ const InboxPage = () => {
                                 setSortOrder(order);
                             }}
                             placeholder="Sort by"
+                            triggerClassName={controlClassName}
                         />
                     </div>
                 </div>
